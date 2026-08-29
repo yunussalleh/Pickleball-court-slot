@@ -130,6 +130,93 @@ def _reload_to_picker(page):
     page.wait_for_selector(".react-datepicker__day", timeout=15000)
 
 
+def _check_one_date(page, date, target_label):
+    """
+    Checks a single date. Returns (slots_found, status) where status is
+    one of: "ok", "outside_window", "nav_failed", "bad_cell_count".
+    Raises on unexpected errors so the caller can decide whether to retry.
+    """
+    # Click "next month" until the calendar shows the month we need,
+    # using position-based detection (see _MONTH_NAV_JS).
+    reached_target = False
+    for _ in range(4):
+        nav_info = page.evaluate(_MONTH_NAV_JS)
+        if nav_info.get("error"):
+            if DEBUG:
+                print(f"  {date}: {nav_info['error']}")
+            return [], "nav_failed"
+        if nav_info["currentMonth"] == target_label:
+            reached_target = True
+            break
+        if nav_info["nextDisabled"] or not nav_info["nextExists"]:
+            if DEBUG:
+                print(f"  {date}: can't navigate further "
+                      f"(stuck on {nav_info['currentMonth']})")
+            return [], "nav_failed"
+        page.evaluate(_CLICK_NEXT_MONTH_JS)
+        page.wait_for_timeout(400)
+
+    if not reached_target:
+        return [], "nav_failed"
+
+    day_str = f"{date.day:03d}"
+    day_cell = page.locator(
+        f".react-datepicker__day--{day_str}:not(.react-datepicker__day--outside-month)"
+    )
+    if day_cell.count() == 0:
+        if DEBUG:
+            print(f"  {date}: day cell not found")
+        return [], "nav_failed"
+
+    cls = day_cell.first.get_attribute("class") or ""
+    if "disabled" in cls:
+        if DEBUG:
+            print(f"  {date}: outside booking window (disabled)")
+        return [], "outside_window"
+
+    day_cell.first.click()
+
+    # Wait for the slot grid to ACTUALLY finish loading (up to 60 real
+    # .appt_slot cells), rather than a fixed timer. Generous timeout since
+    # production (GitHub Actions) has been confirmed slower/higher-latency
+    # than a local run for at least one date per run.
+    try:
+        page.wait_for_function(
+            "() => document.querySelectorAll('.appt_slot').length === 60",
+            timeout=15000,
+        )
+    except Exception:
+        pass  # fall through and read whatever's there; caught by count check below
+
+    class_lists = page.evaluate(_extract_slots_js())
+
+    if DEBUG:
+        print(f"  {date}: got {len(class_lists)} slot cells")
+
+    if len(class_lists) != 4 * len(HOURS):
+        return [], "bad_cell_count"
+
+    slots = []
+    for idx, cls_str in enumerate(class_lists):
+        hour = HOURS[idx % len(HOURS)]
+        if not (WANTED_START_HOUR <= hour < WANTED_END_HOUR):
+            continue
+        court_num = (idx // len(HOURS)) + 1
+        is_open = ("pointer-events-none" not in cls_str) and ("cursor-pointer" in cls_str)
+        if DEBUG:
+            print(f"    Court{court_num} {hour}:00 open={is_open}")
+        if is_open:
+            slots.append({
+                "venue": VENUE_NAME,
+                "date": date.isoformat(),
+                "start_time": f"{hour:02d}:00",
+                "court": f"Court {court_num}",
+                "url": KINGS_URL,
+            })
+
+    return slots, "ok"
+
+
 def check_kings():
     from playwright.sync_api import sync_playwright
 
@@ -148,105 +235,49 @@ def check_kings():
             if date.weekday() not in WANTED_WEEKDAYS:
                 continue
 
-            try:
-                target_label = date.strftime("%B %Y")  # e.g. "September 2026"
+            target_label = date.strftime("%B %Y")  # e.g. "September 2026"
 
-                # Click "next month" until the calendar shows the month we
-                # need, using position-based detection (see _MONTH_NAV_JS).
-                reached_target = False
-                for _ in range(4):
-                    nav_info = page.evaluate(_MONTH_NAV_JS)
-                    if nav_info.get("error"):
-                        if DEBUG:
-                            print(f"  {date}: {nav_info['error']}, skipping")
-                        break
-                    if nav_info["currentMonth"] == target_label:
-                        reached_target = True
-                        break
-                    if nav_info["nextDisabled"] or not nav_info["nextExists"]:
-                        if DEBUG:
-                            print(f"  {date}: can't navigate further "
-                                  f"(stuck on {nav_info['currentMonth']}), skipping")
-                        break
-                    page.evaluate(_CLICK_NEXT_MONTH_JS)
-                    page.wait_for_timeout(400)
-
-                if not reached_target:
-                    # Not necessarily an error (could genuinely be outside
-                    # the site's own booking window) -- no reload needed.
-                    continue
-
-                day_str = f"{date.day:03d}"
-                day_cell = page.locator(
-                    f".react-datepicker__day--{day_str}:not(.react-datepicker__day--outside-month)"
-                )
-                if day_cell.count() == 0:
-                    if DEBUG:
-                        print(f"  {date}: day cell not found, skipping")
-                    continue
-
-                cls = day_cell.first.get_attribute("class") or ""
-                if "disabled" in cls:
-                    if DEBUG:
-                        print(f"  {date}: outside booking window (disabled), skipping")
-                    continue
-
-                day_cell.first.click()
-
-                # Wait for the slot grid to ACTUALLY finish loading (up to
-                # 60 real .appt_slot cells), rather than a fixed timer --
-                # confirmed via live testing that a flat wait sometimes
-                # wasn't long enough, reading a stale/empty grid instead.
+            # Try each date up to twice: if the first attempt hits a
+            # transient issue (slow load, bad cell count, unexpected
+            # error), reload to a clean state and give it ONE more shot
+            # before giving up. Confirmed via live testing that production
+            # (GitHub Actions) occasionally needs this retry for a date
+            # that a local run reads fine on the first try -- without a
+            # retry, that date's real availability was being silently
+            # lost instead of just being slow.
+            slots = []
+            status = "nav_failed"
+            for attempt in range(2):
                 try:
-                    page.wait_for_function(
-                        "() => document.querySelectorAll('.appt_slot').length === 60",
-                        timeout=8000,
-                    )
-                except Exception:
-                    pass  # fall through and read whatever's there
-
-                checked += 1
-                class_lists = page.evaluate(_extract_slots_js())
-
-                if DEBUG:
-                    print(f"  {date}: got {len(class_lists)} slot cells")
-
-                if len(class_lists) != 4 * len(HOURS):
-                    # Grid didn't finish loading, or layout changed -- bail
-                    # out for this date AND reload, so a stuck/slow page
-                    # doesn't ruin every date that follows.
+                    slots, status = _check_one_date(page, date, target_label)
+                except Exception as e:
                     if DEBUG:
-                        print(f"  {date}: unexpected cell count, reloading and skipping")
-                    _reload_to_picker(page)
-                    continue
+                        print(f"  {date}: error on attempt {attempt + 1} ({e})")
+                    status = "error"
 
-                for idx, cls_str in enumerate(class_lists):
-                    hour = HOURS[idx % len(HOURS)]
-                    if not (WANTED_START_HOUR <= hour < WANTED_END_HOUR):
-                        continue
-                    court_num = (idx // len(HOURS)) + 1
-                    is_open = ("pointer-events-none" not in cls_str) and ("cursor-pointer" in cls_str)
+                if status == "ok":
+                    checked += 1
+                    break
+
+                if status == "outside_window":
+                    # Not an error -- genuinely outside the site's own
+                    # booking window. No point retrying.
+                    break
+
+                # "nav_failed", "bad_cell_count", or "error" -- worth one
+                # retry after a full reload.
+                if attempt == 0:
                     if DEBUG:
-                        print(f"    Court{court_num} {hour}:00 open={is_open}")
-                    if is_open:
-                        found.append({
-                            "venue": VENUE_NAME,
-                            "date": date.isoformat(),
-                            "start_time": f"{hour:02d}:00",
-                            "court": f"Court {court_num}",
-                            "url": KINGS_URL,
-                        })
+                        print(f"  {date}: {status}, reloading and retrying once")
+                    try:
+                        _reload_to_picker(page)
+                    except Exception:
+                        pass
 
-            except Exception as e:
-                # Any unexpected error for this one date -- log it, reload
-                # to a clean state, and move on rather than letting it
-                # silently break every remaining date in this run.
-                if DEBUG:
-                    print(f"  {date}: error ({e}), reloading and skipping")
-                try:
-                    _reload_to_picker(page)
-                except Exception:
-                    pass
+            if status == "ok":
+                found.extend(slots)
+            elif DEBUG and status != "outside_window":
+                print(f"  {date}: still failed after retry ({status}), giving up on this date")
 
         if DEBUG:
             page.screenshot(path="kings_debug.png", full_page=True)
