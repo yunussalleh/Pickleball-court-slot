@@ -1,8 +1,7 @@
 """
 Checks Kings Pickleball Arena via their Rezerv booking portal.
 
-VERIFIED LIVE against the real site (unlike the first draft of this file,
-which was an unverified best-guess). Here's what was actually confirmed by
+VERIFIED LIVE against the real site. Here's what was actually confirmed by
 opening the page and inspecting it directly:
 
 - The court booking page is https://kingspickleball.rezerv.co/appointment/386dc17b-9650-4ca6-8fad-1642c6b2629b
@@ -11,11 +10,30 @@ opening the page and inspecting it directly:
 - After clicking "Continue" once, you land on a persistent
   appointment-booking page with a react-datepicker calendar on the left
   and a 4-court x 15-hour (7am-9pm) slot grid on the right.
-- Each bookable date is a real HTML calendar day cell:
-      .react-datepicker__day.react-datepicker__day--0XX
-  Dates outside the booking window carry an extra
-      react-datepicker__day--disabled
-  class -- confirmed the window is roughly ~11 days ahead.
+- Each bookable date IS a real react-datepicker day cell with class
+      react-datepicker__day react-datepicker__day--0XX
+  (zero-padded 3-digit day-of-month), and dates outside the booking window
+  do carry an extra "react-datepicker__day--disabled" class -- this part
+  was correct.
+- HOWEVER: a real production bug was found and fixed here on 2026-08-30.
+  The month label and prev/next navigation arrows do NOT use the standard
+  react-datepicker__current-month / react-datepicker__navigation--next
+  class names -- this is a heavily custom-skinned picker with anonymous,
+  auto-generated CSS class names (e.g. "dgCmgm gnpHiA") that give no
+  stable hook to select by class at all. The original code assumed the
+  standard class names, which don't exist on this page; since the
+  navigation silently failed every time, the checker was actually reading
+  whatever month happened to already be displayed (e.g. checking "day 11"
+  while still viewing August, landing on a PAST date that's correctly
+  marked disabled) -- causing real, currently-open dates like a Sept
+  Friday to be silently skipped as "outside booking window" when they
+  were actually wide open. Confirmed via live testing with real evidence
+  (the exact button/label elements the old selectors were looking for
+  simply don't exist: document.querySelector() returned null for both).
+  Fixed by finding the month label via its TEXT content (matches
+  "Month YYYY") and finding the next/prev arrow buttons by their VISUAL
+  POSITION relative to that label (same row, to the right = next, to the
+  left = previous) instead of by class name.
 - Each of the 60 grid cells has class "appt_slot", in DOM order
   Court1[7am..9pm], Court2[7am..9pm], Court3[...], Court4[...].
 - An OPEN/bookable slot's class list includes "cursor-pointer" and does
@@ -26,9 +44,17 @@ opening the page and inspecting it directly:
   testing both states side by side.
 - Selected = black background, Booked-by-someone-else = green background;
   neither of those count as "open" for our purposes.
+- Kings' own picker only ever shows 2 months (current + next) -- once
+  you've navigated to the far one, "next" becomes genuinely disabled.
+  That's normal, not a bug.
+
+If Kings changes their site layout again, this is the file to fix -- run
+with DEBUG=1 to open a visible browser and see what it's finding:
+    DEBUG=1 python checkers/kings_checker.py
 """
 
 import os
+import re
 import json
 from datetime import datetime, timedelta
 
@@ -49,6 +75,47 @@ def _extract_slots_js():
     """
 
 
+# Finds the month label (text like "September 2026") and the next/prev
+# arrow buttons by POSITION relative to it, since this page's date picker
+# has no stable class names for either -- confirmed live that the
+# "standard" react-datepicker class names simply don't exist here.
+_MONTH_NAV_JS = """
+() => {
+  const label = Array.from(document.querySelectorAll('p'))
+    .find(e => /^[A-Z][a-z]+ \\d{4}$/.test(e.textContent.trim()));
+  if (!label) return { error: 'month label not found' };
+  const lr = label.getBoundingClientRect();
+  const buttons = Array.from(document.querySelectorAll('button')).filter(b => {
+    const r = b.getBoundingClientRect();
+    return Math.abs(r.top - lr.top) < 20 && r.width < 50 && r.width > 10;
+  });
+  const nextBtn = buttons.find(b => b.getBoundingClientRect().x > lr.x);
+  return {
+    currentMonth: label.textContent.trim(),
+    nextExists: !!nextBtn,
+    nextDisabled: nextBtn ? nextBtn.disabled : null,
+  };
+}
+"""
+
+_CLICK_NEXT_MONTH_JS = """
+() => {
+  const label = Array.from(document.querySelectorAll('p'))
+    .find(e => /^[A-Z][a-z]+ \\d{4}$/.test(e.textContent.trim()));
+  if (!label) return false;
+  const lr = label.getBoundingClientRect();
+  const buttons = Array.from(document.querySelectorAll('button')).filter(b => {
+    const r = b.getBoundingClientRect();
+    return Math.abs(r.top - lr.top) < 20 && r.width < 50 && r.width > 10;
+  });
+  const nextBtn = buttons.find(b => b.getBoundingClientRect().x > lr.x);
+  if (!nextBtn || nextBtn.disabled) return false;
+  nextBtn.click();
+  return true;
+}
+"""
+
+
 def check_kings():
     from playwright.sync_api import sync_playwright
 
@@ -66,7 +133,6 @@ def check_kings():
         page.wait_for_selector(".react-datepicker__day", timeout=15000)
 
         checked = 0
-        current_month_label = None
 
         for offset in range(DAYS_AHEAD):
             date = today + timedelta(days=offset)
@@ -75,20 +141,28 @@ def check_kings():
 
             target_label = date.strftime("%B %Y")  # e.g. "September 2026"
 
-            # Click "next month" arrow until the calendar shows the month
-            # we need (rarely more than once, since our window is short).
-            for _ in range(3):
-                month_el = page.locator(".react-datepicker__current-month")
-                if month_el.count() == 0:
+            # Click "next month" until the calendar shows the month we
+            # need, using position-based detection (see _MONTH_NAV_JS).
+            reached_target = False
+            for _ in range(4):
+                nav_info = page.evaluate(_MONTH_NAV_JS)
+                if nav_info.get("error"):
+                    if DEBUG:
+                        print(f"  {date}: {nav_info['error']}, skipping")
                     break
-                label = month_el.first.inner_text().strip()
-                if label == target_label:
+                if nav_info["currentMonth"] == target_label:
+                    reached_target = True
                     break
-                next_btn = page.locator(".react-datepicker__navigation--next")
-                if next_btn.count() == 0:
+                if nav_info["nextDisabled"] or not nav_info["nextExists"]:
+                    if DEBUG:
+                        print(f"  {date}: can't navigate further "
+                              f"(stuck on {nav_info['currentMonth']}), skipping")
                     break
-                next_btn.first.click()
-                page.wait_for_timeout(300)
+                page.evaluate(_CLICK_NEXT_MONTH_JS)
+                page.wait_for_timeout(400)
+
+            if not reached_target:
+                continue
 
             day_str = f"{date.day:03d}"
             day_cell = page.locator(
