@@ -18,7 +18,7 @@ from datetime import datetime
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import SMASHING_URL, WANTED_WEEKDAYS, WANTED_START_HOUR, WANTED_END_HOUR, DAYS_AHEAD
+from config import SMASHING_URL, WANTED_WEEKDAYS, WANTED_START_HOUR, WANTED_END_HOUR, DAYS_AHEAD, get_today
 
 VENUE_NAME = "Smashing Pickle (Jurong Play Grounds)"
 DEBUG = os.environ.get("DEBUG") == "1"
@@ -56,7 +56,7 @@ def check_smashing():
         # weekdays within DAYS_AHEAD, and click into each one.
         tab_buttons = page.locator("button", has_text=re.compile(r"\d{2}/\d{2}")).all()
 
-        today = datetime.now().date()
+        today = get_today()
         checked = 0
 
         for i in range(len(tab_buttons)):
@@ -96,13 +96,18 @@ def check_smashing():
                 if hour is None or not (WANTED_START_HOUR <= hour < WANTED_END_HOUR):
                     continue
 
+                # VERIFIED via live click-testing (2026-08-30): the real
+                # HTML `disabled` attribute is the correct, sufficient
+                # signal here. Clicking a disabled slot does nothing;
+                # clicking a non-disabled one correctly selects it (shows
+                # up in a real "Selected slots" panel). An earlier version
+                # of this file also had an opacity/pointer-events fallback
+                # "just in case" -- removed after confirming live that
+                # BOTH available and unavailable slots report identical
+                # opacity (1) and pointer-events (auto) on this site, so
+                # that fallback could never have done anything useful and
+                # was just unverified guesswork.
                 is_disabled = slot.is_disabled()
-                if not is_disabled:
-                    # Extra guard: some sites only grey out visually
-                    # without a real disabled attribute.
-                    opacity = slot.evaluate("el => getComputedStyle(el).opacity")
-                    pointer_events = slot.evaluate("el => getComputedStyle(el).pointerEvents")
-                    is_disabled = (float(opacity) < 0.6) or (pointer_events == "none")
 
                 if DEBUG:
                     print(f"  {date} {first_line}: disabled={is_disabled}")
