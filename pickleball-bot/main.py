@@ -29,7 +29,6 @@ from collections import defaultdict
 
 from config import STATE_FILE, WANTED_START_HOUR, WANTED_END_HOUR
 from notifier import send_telegram_message
-from checkers.playtomic_checker import check_playtomic
 from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
 
@@ -45,8 +44,15 @@ FAILURE_THRESHOLD = 3
 _state_dir = os.path.dirname(STATE_FILE) or "."
 FAILURE_STATE_FILE = os.path.join(_state_dir, "failure_streaks.json")
 
+# NOTE: Playtomic (Pickle Padel Movement) is deliberately NOT included
+# here. Confirmed via real evidence (CloudFront's own "403 Request
+# blocked" error page, captured automatically to debug_failures/ during
+# testing) that Playtomic's CDN blocks GitHub Actions' IP ranges outright,
+# before any of our code, headers, or browser rendering even comes into
+# play. This isn't fixable by changing the checker -- see the detailed
+# note at the top of checkers/playtomic_checker.py if you want to run it
+# separately from a non-datacenter IP (e.g. your own computer).
 CHECKERS = {
-    "playtomic": check_playtomic,
     "smashing": check_smashing,
     "kings": check_kings,
 }
