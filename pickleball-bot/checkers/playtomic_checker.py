@@ -138,14 +138,47 @@ def check_playtomic():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not DEBUG)
-        page = browser.new_page()
+        # Playwright's default headless Chromium User-Agent literally
+        # contains "HeadlessChrome" -- a very common, easy-to-block bot
+        # signature. Override it with a normal desktop Chrome UA so the
+        # request looks like genuine browser traffic, not automation.
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1440, "height": 900},
+        )
+        page = context.new_page()
 
         for date in wanted_dates:
             date_str = date.isoformat()
             url = f"{BASE_URL}?sport=PICKLEBALL&date={date_str}"
             try:
-                page.goto(url, wait_until="networkidle", timeout=20000)
-                page.wait_for_timeout(800)  # let the schedule grid render
+                page.goto(url, wait_until="domcontentloaded", timeout=20000)
+
+                # Best-effort: dismiss the cookie-consent banner if present.
+                # (Confirmed via live testing that the banner itself doesn't
+                # actually block the underlying page content from rendering
+                # -- the real fix for the "no court rows found" failure was
+                # the User-Agent override above. This click is just good
+                # hygiene, not load-bearing.)
+                try:
+                    accept_btn = page.get_by_text("Accept All", exact=False)
+                    if accept_btn.count() > 0:
+                        accept_btn.first.click(timeout=3000)
+                except Exception:
+                    pass
+
+                # Wait for a REAL court label to actually appear, rather
+                # than guessing a fixed sleep duration -- more robust
+                # against slow loads than a flat 800ms wait.
+                page.wait_for_function(
+                    """() => Array.from(document.querySelectorAll('div,span'))
+                        .some(e => e.children.length === 0 && /^Pickleball \\d$/.test(e.textContent.trim()))""",
+                    timeout=15000,
+                )
+
                 data = page.evaluate(_EXTRACT_JS, wanted_hours)
             except Exception as e:
                 print(f"[playtomic] Error loading {date_str}: {e}")
