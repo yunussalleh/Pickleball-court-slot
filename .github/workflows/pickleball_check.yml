@@ -2,11 +2,14 @@ name: Check pickleball slots
 
 on:
   schedule:
+    # Every 5 minutes -- GitHub's practical minimum. May still be delayed
+    # a few minutes under load; that's outside our control. Cron is in
+    # UTC (Singapore = UTC+8).
     - cron: "*/5 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch: {}  # lets you click "Run workflow" manually to test
 
 permissions:
-  contents: write
+  contents: write  # needed so the workflow can commit the updated state file
 
 jobs:
   check:
@@ -31,6 +34,15 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
+
+      - name: Upload debug evidence (only present if a checker failed)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-failures
+          path: pickleball-bot/debug_failures/
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Persist state
         run: |
