@@ -1,7 +1,14 @@
 """
-Runs all three venue checkers, compares results against previously-seen
-open slots (so you're not spammed every run), and sends a Telegram alert
-for anything new.
+Runs all three venue checkers, groups the individual hourly slots each one
+finds into full back-to-back 2-hour blocks (on the SAME court), compares
+against previously-seen open blocks (so you're not spammed every run), and
+sends a Telegram alert for anything new.
+
+Why grouping matters: each checker reports individual 1-hour slots (e.g.
+"6pm open", "7pm open" as separate entries). But a 2-hour session needs
+BOTH consecutive hours open on the SAME court -- 6pm open with 7pm booked
+is useless to you. This file is what turns "which hours are open" into
+"which actual 2-hour sessions can you book right now".
 
 Usage:
     python main.py
@@ -12,18 +19,54 @@ free GitHub Actions setup, or just cron this on your own machine/server).
 
 import json
 import os
-import sys
 import traceback
+from collections import defaultdict
 
-from config import STATE_FILE
+from config import STATE_FILE, WANTED_START_HOUR, WANTED_END_HOUR
 from notifier import send_telegram_message
 from checkers.playtomic_checker import check_playtomic
 from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
 
+# The full set of consecutive hours a valid session needs, e.g. {18, 19}
+# for a 6pm-8pm (2-hour) session. If WANTED_START_HOUR/END_HOUR in
+# config.py ever change to a 3-hour window, this adjusts automatically.
+REQUIRED_HOURS = set(range(WANTED_START_HOUR, WANTED_END_HOUR))
 
-def slot_key(slot: dict) -> str:
-    return f"{slot['venue']}|{slot['date']}|{slot['start_time']}"
+
+def find_full_blocks(slots: list) -> list:
+    """
+    Groups individual hourly slots by (venue, date, court) and keeps only
+    the groups where EVERY hour in REQUIRED_HOURS is open -- i.e. a real,
+    bookable, back-to-back 2-hour session.
+    """
+    groups = defaultdict(set)
+    sample = {}  # one representative slot dict per group, for venue/url info
+
+    for s in slots:
+        hour = int(s["start_time"].split(":")[0])
+        key = (s["venue"], s["date"], s.get("court", "any"))
+        groups[key].add(hour)
+        sample[key] = s
+
+    blocks = []
+    for key, hours_open in groups.items():
+        if REQUIRED_HOURS.issubset(hours_open):
+            venue, date, court = key
+            ref = sample[key]
+            blocks.append({
+                "venue": venue,
+                "date": date,
+                "court": court,
+                "start_time": f"{WANTED_START_HOUR:02d}:00",
+                "end_time": f"{WANTED_END_HOUR:02d}:00",
+                "url": ref["url"],
+            })
+    return blocks
+
+
+def block_key(block: dict) -> str:
+    return f"{block['venue']}|{block['date']}|{block['court']}|{block['start_time']}-{block['end_time']}"
 
 
 def load_seen() -> set:
@@ -45,7 +88,7 @@ def save_seen(seen: set):
 def run_checker_safely(name, fn):
     try:
         results = fn()
-        print(f"[{name}] {len(results)} open slot(s) in window")
+        print(f"[{name}] {len(results)} open hourly slot(s) in window")
         return results
     except Exception as e:
         print(f"[{name}] FAILED: {e}")
@@ -59,27 +102,35 @@ def main():
     all_slots += run_checker_safely("smashing", check_smashing)
     all_slots += run_checker_safely("kings", check_kings)
 
-    seen = load_seen()
-    new_slots = [s for s in all_slots if slot_key(s) not in seen]
+    full_blocks = find_full_blocks(all_slots)
+    print(f"Found {len(full_blocks)} full back-to-back 2-hour block(s) across all venues.")
 
-    # Also prune slots from `seen` that are no longer open (e.g. the date
-    # has passed, or they got booked again) so state doesn't grow forever
-    # and so a slot that opens/closes/opens again re-alerts you.
-    current_keys = {slot_key(s) for s in all_slots}
+    seen = load_seen()
+    new_blocks = [b for b in full_blocks if block_key(b) not in seen]
+
+    # Prune state entries for blocks that are no longer fully open (booked
+    # again, or the date passed) so a block that closes then reopens will
+    # correctly re-alert you next time.
+    current_keys = {block_key(b) for b in full_blocks}
     seen = seen & current_keys
 
-    if new_slots:
-        lines = ["🏓 <b>New pickleball slot(s) available!</b>", ""]
-        for s in sorted(new_slots, key=lambda x: (x["date"], x["start_time"])):
-            lines.append(f"• <b>{s['venue']}</b>\n  {s['date']} at {s['start_time']}\n  {s['url']}")
+    if new_blocks:
+        lines = ["🏓 <b>2-hour pickleball session available!</b>", ""]
+        for b in sorted(new_blocks, key=lambda x: (x["date"], x["start_time"])):
+            court_str = f" ({b['court']})" if b["court"] != "any" else ""
+            lines.append(
+                f"• <b>{b['venue']}</b>{court_str}\n"
+                f"  {b['date']}, {b['start_time']}\u2013{b['end_time']}\n"
+                f"  {b['url']}"
+            )
         message = "\n".join(lines)
         print(message)
         send_telegram_message(message)
 
-        for s in new_slots:
-            seen.add(slot_key(s))
+        for b in new_blocks:
+            seen.add(block_key(b))
     else:
-        print("No new open slots this run.")
+        print("No new full 2-hour blocks this run.")
 
     save_seen(seen)
 
