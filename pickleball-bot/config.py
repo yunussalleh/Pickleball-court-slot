@@ -13,7 +13,7 @@ WANTED_START_HOUR = 18
 WANTED_END_HOUR = 20
 
 # How many days ahead to check for each venue
-DAYS_AHEAD = 10
+DAYS_AHEAD = 14
 
 # Playtomic tenant id for Pickle Padel Movement (PUB Recreation Club)
 # Source: https://playtomic.io/tenant/2987e8fb-6130-4508-a3e1-fe7a329d446f
