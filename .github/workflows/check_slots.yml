@@ -2,17 +2,18 @@ name: Check pickleball slots
 
 on:
   schedule:
-    # Every 15 minutes. GitHub may delay this by a few minutes under load;
-    # that's fine for this use case. Cron is in UTC (Singapore = UTC+8).
     - cron: "*/15 * * * *"
-  workflow_dispatch: {}  # lets you click "Run workflow" manually to test
+  workflow_dispatch: {}
 
 permissions:
-  contents: write  # needed so the workflow can commit the updated state file
+  contents: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pickleball-bot
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +36,6 @@ jobs:
         run: |
           git config user.name "pickleball-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add state/seen_slots.json || true
+          git add pickleball-bot/state/seen_slots.json || true
           git diff --quiet --cached || git commit -m "Update seen slots [skip ci]"
           git push || true
