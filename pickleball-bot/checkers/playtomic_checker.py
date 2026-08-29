@@ -1,16 +1,34 @@
 """
 Checks Pickle Padel Movement (PUB Recreation Club) via Playtomic's public
-booking web page -- NOT the direct API anymore.
+booking web page.
+
+STATUS: DISABLED in the automated bot (see main.py's CHECKERS dict) as of
+2026-08-29. Root cause, confirmed with real evidence (CloudFront's own
+error page, captured via debug_failures/ screenshots+HTML): Playtomic's
+CDN (CloudFront) returns a generic "403 Request blocked" page for EVERY
+request from GitHub Actions' runner IP ranges -- before our code, headers,
+User-Agent, or cookie handling even come into play. This is an IP-level
+block on GitHub's shared/datacenter IP ranges (a known issue for many
+CDNs/WAFs, since those ranges are heavily used by scrapers industry-wide),
+not something fixable by changing this script.
+
+This file still works fine run from a normal residential/non-datacenter
+IP (confirmed manually, and via a real browser session) -- so if you want
+Playtomic back, your options are: (a) run this specific checker on your
+own computer instead of GitHub Actions, on a schedule you control, or
+(b) route these specific requests through a residential proxy service.
+Neither is set up here since it's disproportionate effort/cost for one of
+three venues in a personal hobby bot.
 
 HISTORY: this originally called Playtomic's undocumented
-api.playtomic.io/v1/availability endpoint directly. That got 403'd by
-Playtomic's server (confirmed via live testing on 2026-08-29) -- likely
-blocked at the TLS/connection-fingerprint level, since changing the
-User-Agent/headers alone didn't help. A real browser isn't distinguishable
-from genuine traffic that way, so this now drives a real page load instead,
-exactly like the Smashing and Kings checkers.
+api.playtomic.io/v1/availability endpoint directly, which also got 403'd
+(same root cause). Rewritten to drive a real browser page load instead
+(like the Smashing and Kings checkers) on the theory that a real browser
+would look like genuine traffic -- but the CloudFront block operates at
+the IP level, so it blocked the browser-based approach too.
 
-VERIFIED LIVE against the real site while rewriting this:
+VERIFIED LIVE against the real site while building this (the extraction
+logic below is confirmed correct from a non-blocked IP):
 - The public booking page is:
     https://playtomic.com/clubs/pickle-padel-movement?sport=PICKLEBALL&date=YYYY-MM-DD
   Navigating directly to a specific date via the URL query param works
@@ -32,8 +50,9 @@ VERIFIED LIVE against the real site while rewriting this:
   in a compressed screenshot. Always confirm against the legend's actual
   computed background-color, like this file does.
 
-If Playtomic changes their site layout, this is the file to fix -- run
-with DEBUG=1 to open a visible browser and see what it's finding:
+If you re-enable this from a non-blocked IP and Playtomic changes their
+site layout, run with DEBUG=1 to open a visible browser and see what it's
+finding:
     DEBUG=1 python checkers/playtomic_checker.py
 """
 
@@ -43,7 +62,7 @@ from datetime import datetime, timedelta
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import WANTED_WEEKDAYS, WANTED_START_HOUR, WANTED_END_HOUR, DAYS_AHEAD
+from config import WANTED_WEEKDAYS, WANTED_START_HOUR, WANTED_END_HOUR, DAYS_AHEAD, get_today
 
 VENUE_NAME = "Pickle Padel Movement (PUB Recreation Club)"
 BASE_URL = "https://playtomic.com/clubs/pickle-padel-movement"
@@ -125,7 +144,7 @@ def check_playtomic():
     from playwright.sync_api import sync_playwright
 
     found = []
-    today = datetime.now().date()
+    today = get_today()
     wanted_hours = list(range(WANTED_START_HOUR, WANTED_END_HOUR))
 
     wanted_dates = [
