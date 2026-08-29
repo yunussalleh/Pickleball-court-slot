@@ -4,6 +4,11 @@ finds into full back-to-back 2-hour blocks (on the SAME court), compares
 against previously-seen open blocks (so you're not spammed every run), and
 sends a Telegram alert for anything new.
 
+Also tracks each checker's consecutive failure count. If a checker fails
+several runs in a row, it sends you a separate warning message -- since a
+long silent failure (site blocked us, layout changed, etc.) looks exactly
+like "nothing's open" from the outside otherwise.
+
 Why grouping matters: each checker reports individual 1-hour slots (e.g.
 "6pm open", "7pm open" as separate entries). But a 2-hour session needs
 BOTH consecutive hours open on the SAME court -- 6pm open with 7pm booked
@@ -32,6 +37,19 @@ from checkers.kings_checker import check_kings
 # for a 6pm-8pm (2-hour) session. If WANTED_START_HOUR/END_HOUR in
 # config.py ever change to a 3-hour window, this adjusts automatically.
 REQUIRED_HOURS = set(range(WANTED_START_HOUR, WANTED_END_HOUR))
+
+# How many consecutive failed runs before we warn you that a checker might
+# be blocked or broken, rather than just quietly finding nothing.
+FAILURE_THRESHOLD = 3
+
+_state_dir = os.path.dirname(STATE_FILE) or "."
+FAILURE_STATE_FILE = os.path.join(_state_dir, "failure_streaks.json")
+
+CHECKERS = {
+    "playtomic": check_playtomic,
+    "smashing": check_smashing,
+    "kings": check_kings,
+}
 
 
 def find_full_blocks(slots: list) -> list:
@@ -69,43 +87,93 @@ def block_key(block: dict) -> str:
     return f"{block['venue']}|{block['date']}|{block['court']}|{block['start_time']}-{block['end_time']}"
 
 
-def load_seen() -> set:
-    if not os.path.exists(STATE_FILE):
+def load_json_set(path) -> set:
+    if not os.path.exists(path):
         return set()
     try:
-        with open(STATE_FILE, "r") as f:
+        with open(path, "r") as f:
             return set(json.load(f))
     except Exception:
         return set()
 
 
-def save_seen(seen: set):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
-        json.dump(sorted(seen), f, indent=2)
+def save_json_set(path, data: set):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(sorted(data), f, indent=2)
 
 
-def run_checker_safely(name, fn):
+def load_failure_streaks() -> dict:
+    if not os.path.exists(FAILURE_STATE_FILE):
+        return {}
     try:
-        results = fn()
-        print(f"[{name}] {len(results)} open hourly slot(s) in window")
-        return results
-    except Exception as e:
-        print(f"[{name}] FAILED: {e}")
-        traceback.print_exc()
-        return []
+        with open(FAILURE_STATE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_failure_streaks(streaks: dict):
+    os.makedirs(_state_dir, exist_ok=True)
+    with open(FAILURE_STATE_FILE, "w") as f:
+        json.dump(streaks, f, indent=2)
+
+
+def run_all_checkers():
+    """
+    Runs each checker, tracks consecutive failures per checker, and returns
+    (all_slots, warning_messages) -- warning_messages is non-empty only when
+    a checker just crossed the failure threshold, or just recovered after
+    being broken.
+    """
+    all_slots = []
+    warnings = []
+    streaks = load_failure_streaks()
+
+    for name, fn in CHECKERS.items():
+        try:
+            results = fn()
+            print(f"[{name}] {len(results)} open hourly slot(s) in window")
+            all_slots += results
+
+            prior_streak = streaks.get(name, 0)
+            if prior_streak >= FAILURE_THRESHOLD:
+                warnings.append(
+                    f"✅ <b>{name}</b> checker is working again "
+                    f"(had failed {prior_streak} run(s) in a row)."
+                )
+            streaks[name] = 0
+
+        except Exception as e:
+            streaks[name] = streaks.get(name, 0) + 1
+            print(f"[{name}] FAILED (streak: {streaks[name]}): {e}")
+            traceback.print_exc()
+
+            if streaks[name] == FAILURE_THRESHOLD:
+                warnings.append(
+                    f"⚠️ <b>{name}</b> checker has failed {FAILURE_THRESHOLD} runs in a row.\n"
+                    f"It might be blocked, or the site's layout changed. "
+                    f"Worth checking the GitHub Actions log, or running:\n"
+                    f"DEBUG=1 python checkers/{name}_checker.py"
+                )
+            # Deliberately don't re-warn every single run after the first
+            # threshold-crossing -- one warning is enough until it recovers.
+
+    save_failure_streaks(streaks)
+    return all_slots, warnings
 
 
 def main():
-    all_slots = []
-    all_slots += run_checker_safely("playtomic", check_playtomic)
-    all_slots += run_checker_safely("smashing", check_smashing)
-    all_slots += run_checker_safely("kings", check_kings)
+    all_slots, failure_warnings = run_all_checkers()
+
+    for w in failure_warnings:
+        print(w)
+        send_telegram_message(w)
 
     full_blocks = find_full_blocks(all_slots)
     print(f"Found {len(full_blocks)} full back-to-back 2-hour block(s) across all venues.")
 
-    seen = load_seen()
+    seen = load_json_set(STATE_FILE)
     new_blocks = [b for b in full_blocks if block_key(b) not in seen]
 
     # Prune state entries for blocks that are no longer fully open (booked
@@ -132,7 +200,7 @@ def main():
     else:
         print("No new full 2-hour blocks this run.")
 
-    save_seen(seen)
+    save_json_set(STATE_FILE, seen)
 
 
 if __name__ == "__main__":
