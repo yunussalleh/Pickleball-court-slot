@@ -183,6 +183,19 @@ def check_playtomic():
             except Exception as e:
                 print(f"[playtomic] Error loading {date_str}: {e}")
                 failures += 1
+                # Capture real evidence of what went wrong, always (not
+                # just in DEBUG mode) -- we've already guessed wrong twice
+                # (cookie banner, then plain User-Agent) about why this
+                # fails specifically in headless CI but not in a real
+                # browser. Rather than guess a third time, save what the
+                # page actually looked like so it can be inspected directly.
+                try:
+                    os.makedirs("debug_failures", exist_ok=True)
+                    page.screenshot(path=f"debug_failures/playtomic_{date_str}.png", full_page=True)
+                    with open(f"debug_failures/playtomic_{date_str}.html", "w") as f:
+                        f.write(page.content())
+                except Exception as capture_err:
+                    print(f"[playtomic] Also failed to capture debug evidence: {capture_err}")
                 continue
 
             if isinstance(data, dict) and data.get("error"):
