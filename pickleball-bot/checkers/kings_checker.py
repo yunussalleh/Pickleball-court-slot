@@ -60,7 +60,7 @@ from datetime import datetime, timedelta
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import KINGS_URL, WANTED_WEEKDAYS, WANTED_START_HOUR, WANTED_END_HOUR, DAYS_AHEAD
+from config import KINGS_URL, WANTED_WEEKDAYS, WANTED_START_HOUR, WANTED_END_HOUR, DAYS_AHEAD, get_today
 
 VENUE_NAME = "Kings Pickleball Arena (Havelock)"
 DEBUG = os.environ.get("DEBUG") == "1"
@@ -221,7 +221,7 @@ def check_kings():
     from playwright.sync_api import sync_playwright
 
     found = []
-    today = datetime.now().date()
+    today = get_today()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not DEBUG)
