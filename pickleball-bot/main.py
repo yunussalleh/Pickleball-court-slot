@@ -31,6 +31,7 @@ from config import STATE_FILE, WANTED_START_HOUR, WANTED_END_HOUR
 from notifier import send_telegram_message
 from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
+from checkers.theark_checker import check_theark
 
 # The full set of consecutive hours a valid session needs, e.g. {18, 19}
 # for a 6pm-8pm (2-hour) session. If WANTED_START_HOUR/END_HOUR in
@@ -55,6 +56,7 @@ FAILURE_STATE_FILE = os.path.join(_state_dir, "failure_streaks.json")
 CHECKERS = {
     "smashing": check_smashing,
     "kings": check_kings,
+    "theark": check_theark,  # Orchid Country Club + Cuppage
 }
 
 
