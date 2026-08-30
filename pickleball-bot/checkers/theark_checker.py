@@ -48,7 +48,7 @@ BASE_URL = "https://theark.sg/pickleball/booking"
 # venue query-param value -> display name used in Telegram messages
 VENUES = {
     "Orchid Country Club": "Orchid Country Club (The ARK)",
-    "Cuppage": "Cuppage (The ARK)",
+    # Cuppage removed on request -- court quality wasn't good.
 }
 
 _EXTRACT_JS = """
