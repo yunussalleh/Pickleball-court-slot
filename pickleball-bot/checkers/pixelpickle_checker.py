@@ -159,11 +159,31 @@ def check_pixelpickle():
                 failures += 1
                 continue
 
+            # VERIFICATION READ: re-check the same page a moment later
+            # before trusting this result. Confirmed via live evidence
+            # (repeated identical Telegram alerts appearing then
+            # disappearing from the bot's own state history at similar
+            # times day after day) that a single read can occasionally
+            # catch this page mid-load, before its booking data has fully
+            # rendered -- misreading a genuinely BOOKED slot as open. A
+            # slow page only ever causes a false "nothing booked here"
+            # reading, never a false booking, so taking the UNION of
+            # bookings seen across two reads (a court/hour only counts as
+            # open if NEITHER read saw a booking there) eliminates that
+            # false-positive without needing a fixed longer wait time,
+            # which wouldn't reliably fix a case where the page simply
+            # loaded slowly for external reasons.
+            page.wait_for_timeout(2000)
+            data2 = page.evaluate(_EXTRACT_JS)
+            bookings2 = data2.get("bookings", []) if not data2.get("error") else []
+
             courts = data["courts"]
-            bookings = data["bookings"]
+            bookings = data["bookings"] + bookings2
 
             if DEBUG:
-                print(f"  {date_str}: courts={courts}, {len(bookings)} existing booking(s)")
+                print(f"  {date_str}: courts={courts}, "
+                      f"{len(data['bookings'])} booking(s) on read 1, "
+                      f"{len(bookings2)} booking(s) on read 2")
 
             # Build a set of (court, hour) pairs that are BOOKED, by
             # expanding each booking's time range into individual hours.
