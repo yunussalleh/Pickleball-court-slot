@@ -26,6 +26,7 @@ import json
 import os
 import traceback
 from collections import defaultdict
+from datetime import datetime
 
 from config import STATE_FILE, WANTED_START_HOUR, WANTED_END_HOUR
 from notifier import send_telegram_message
@@ -196,9 +197,10 @@ def main():
         lines = ["🏓 <b>2-hour pickleball session available!</b>", ""]
         for b in sorted(new_blocks, key=lambda x: (x["date"], x["start_time"])):
             court_str = f" ({b['court']})" if b["court"] != "any" else ""
+            day_name = datetime.strptime(b["date"], "%Y-%m-%d").strftime("%A")
             lines.append(
                 f"• <b>{b['venue']}</b>{court_str}\n"
-                f"  {b['date']}, {b['start_time']}\u2013{b['end_time']}\n"
+                f"  {day_name}, {b['date']}, {b['start_time']}\u2013{b['end_time']}\n"
                 f"  {b['url']}"
             )
         message = "\n".join(lines)
