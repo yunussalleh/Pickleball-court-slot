@@ -37,6 +37,16 @@ def _parse_time_label(label: str):
     return hour
 
 
+def _load_venue_page(page, attempt_timeout_ms):
+    """
+    Navigates to Smashing and clicks into the venue page. Raises on
+    failure so the caller can retry with a fresh page load.
+    """
+    page.goto(SMASHING_URL, wait_until="networkidle", timeout=attempt_timeout_ms)
+    page.get_by_text("Jurong Gateway Road").first.click(timeout=attempt_timeout_ms)
+    page.wait_for_selector("text=Select date", timeout=attempt_timeout_ms)
+
+
 def check_smashing():
     from playwright.sync_api import sync_playwright
 
@@ -45,11 +55,28 @@ def check_smashing():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not DEBUG)
         page = browser.new_page()
-        page.goto(SMASHING_URL, wait_until="networkidle")
 
-        # Land on venue select screen -> click the single Jurong venue card.
-        page.get_by_text("Jurong Gateway Road").first.click()
-        page.wait_for_selector("text=Select date")
+        # Retry the initial load up to twice with a longer timeout on the
+        # second attempt. Confirmed via live testing (same site, fresh
+        # cookie-less browser, works instantly and consistently every
+        # time from a normal connection) that this isn't a real site
+        # change or a cookie/consent-banner issue -- production
+        # (GitHub Actions) appears to have genuinely higher latency
+        # reaching this site than a typical connection does, so a single
+        # attempt with the default 30s timeout can occasionally time out
+        # even though nothing is actually broken.
+        last_error = None
+        for attempt, timeout_ms in enumerate([30000, 60000]):
+            try:
+                _load_venue_page(page, timeout_ms)
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if DEBUG:
+                    print(f"Attempt {attempt + 1} failed ({e}); retrying with a longer timeout")
+        if last_error:
+            raise last_error
 
         # Date tabs render as a row of buttons, each showing e.g. "Sat\n29/08".
         # We look at all of them, figure out which correspond to our wanted
