@@ -159,23 +159,31 @@ def check_pixelpickle():
                 failures += 1
                 continue
 
-            # VERIFICATION READ: re-check the same page a moment later
-            # before trusting this result. Confirmed via live evidence
-            # (repeated identical Telegram alerts appearing then
-            # disappearing from the bot's own state history at similar
-            # times day after day) that a single read can occasionally
-            # catch this page mid-load, before its booking data has fully
-            # rendered -- misreading a genuinely BOOKED slot as open. A
-            # slow page only ever causes a false "nothing booked here"
-            # reading, never a false booking, so taking the UNION of
-            # bookings seen across two reads (a court/hour only counts as
-            # open if NEITHER read saw a booking there) eliminates that
-            # false-positive without needing a fixed longer wait time,
-            # which wouldn't reliably fix a case where the page simply
-            # loaded slowly for external reasons.
-            page.wait_for_timeout(2000)
-            data2 = page.evaluate(_EXTRACT_JS)
-            bookings2 = data2.get("bookings", []) if not data2.get("error") else []
+            # VERIFICATION READ: reload the page completely and re-check
+            # from scratch before trusting this result. Confirmed via live
+            # evidence (the bot's own state history showing Pixel Pickle
+            # entries removed then re-added on nearly EVERY consecutive
+            # run, a suspiciously regular pattern unlike real booking
+            # activity) that this needs a genuine independent re-fetch,
+            # not just re-reading the same already-loaded page after a
+            # short wait -- a plain re-evaluate can't catch inconsistent
+            # or cached data coming from the server itself, only a slow
+            # client-side render, and the evidence points to something
+            # closer to the former. A slow/inconsistent read only ever
+            # causes a false "nothing booked here" reading, never a false
+            # booking, so taking the UNION of bookings seen across two
+            # independent loads (a court/hour only counts as open if
+            # NEITHER load saw a booking there) eliminates that
+            # false-positive regardless of which of the two causes it
+            # turns out to be.
+            try:
+                page.reload(wait_until="networkidle", timeout=20000)
+                page.wait_for_selector("text=/PickleBall Court/i", timeout=10000)
+                data2 = page.evaluate(_EXTRACT_JS)
+                bookings2 = data2.get("bookings", []) if not data2.get("error") else []
+            except Exception as e:
+                print(f"[pixelpickle] Verification reload failed for {date_str}: {e}")
+                bookings2 = []
 
             courts = data["courts"]
             bookings = data["bookings"] + bookings2
@@ -183,7 +191,7 @@ def check_pixelpickle():
             if DEBUG:
                 print(f"  {date_str}: courts={courts}, "
                       f"{len(data['bookings'])} booking(s) on read 1, "
-                      f"{len(bookings2)} booking(s) on read 2")
+                      f"{len(bookings2)} booking(s) on read 2 (after full reload)")
 
             # Build a set of (court, hour) pairs that are BOOKED, by
             # expanding each booking's time range into individual hours.
