@@ -60,11 +60,7 @@ def check_smashing():
         # second attempt. Confirmed via live testing (same site, fresh
         # cookie-less browser, works instantly and consistently every
         # time from a normal connection) that this isn't a real site
-        # change or a cookie/consent-banner issue -- production
-        # (GitHub Actions) appears to have genuinely higher latency
-        # reaching this site than a typical connection does, so a single
-        # attempt with the default 30s timeout can occasionally time out
-        # even though nothing is actually broken.
+        # change or a cookie/consent-banner issue.
         last_error = None
         for attempt, timeout_ms in enumerate([30000, 60000]):
             try:
@@ -76,6 +72,21 @@ def check_smashing():
                 if DEBUG:
                     print(f"Attempt {attempt + 1} failed ({e}); retrying with a longer timeout")
         if last_error:
+            # Even a 60-second timeout wasn't enough -- that's long
+            # enough to rule out plain network latency as the cause, so
+            # something structurally different is likely happening in
+            # this environment specifically (similar to how a screenshot
+            # was what actually revealed Playtomic's CloudFront block,
+            # instead of continuing to guess at header/timing fixes).
+            # Capture real evidence of what the page actually looks like
+            # here, always (not just in DEBUG mode).
+            try:
+                os.makedirs("debug_failures", exist_ok=True)
+                page.screenshot(path="debug_failures/smashing_failure.png", full_page=True)
+                with open("debug_failures/smashing_failure.html", "w") as f:
+                    f.write(page.content())
+            except Exception as capture_err:
+                print(f"[smashing] Also failed to capture debug evidence: {capture_err}")
             raise last_error
 
         # Date tabs render as a row of buttons, each showing e.g. "Sat\n29/08".
