@@ -145,9 +145,22 @@ def check_pixelpickle():
             url = f"{BASE_URL}?viewtype=0&viewdate={date_str}"
 
             load_error = None
-            for timeout_ms in (20000, 40000):
+            for timeout_ms in (15000, 25000):
                 try:
-                    page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                    # NOTE: deliberately NOT waiting for "networkidle" here.
+                    # Confirmed via a captured screenshot (2026-09-02) that
+                    # this site's real content (the actual booking table,
+                    # with real data) renders completely fine well before
+                    # "networkidle" is ever satisfied -- something on this
+                    # page (likely the "Help make AllBooked better"
+                    # analytics/tracking banner) keeps making background
+                    # requests that apparently never go fully quiet, so a
+                    # networkidle wait can hang until timeout even though
+                    # the page is functionally done loading. The
+                    # wait_for_selector below is the real gate: it directly
+                    # waits for the actual content we need, so we don't
+                    # need networkidle as a proxy for "is it ready" at all.
+                    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                     page.wait_for_selector("text=/PickleBall Court/i", timeout=10000)
                     load_error = None
                     break
@@ -159,19 +172,6 @@ def check_pixelpickle():
             if load_error:
                 print(f"[pixelpickle] Error loading {date_str}: {load_error}")
                 failures += 1
-                # Capture real evidence of what's actually happening here,
-                # since this exact date has been failing intermittently
-                # and repeatedly -- rather than guess whether it's plain
-                # slowness or something like the Cloudflare bot-challenge
-                # that turned out to be blocking Smashing, save what the
-                # page actually looks like so it can be checked directly.
-                try:
-                    os.makedirs("debug_failures", exist_ok=True)
-                    page.screenshot(path=f"debug_failures/pixelpickle_{date_str}.png", full_page=True)
-                    with open(f"debug_failures/pixelpickle_{date_str}.html", "w") as f:
-                        f.write(page.content())
-                except Exception as capture_err:
-                    print(f"[pixelpickle] Also failed to capture debug evidence: {capture_err}")
                 continue
 
             data = page.evaluate(_EXTRACT_JS)
@@ -199,7 +199,9 @@ def check_pixelpickle():
             # false-positive regardless of which of the two causes it
             # turns out to be.
             try:
-                page.reload(wait_until="networkidle", timeout=20000)
+                # Same fix as the initial load above: don't wait for
+                # networkidle, wait for the actual content instead.
+                page.reload(wait_until="domcontentloaded", timeout=15000)
                 page.wait_for_selector("text=/PickleBall Court/i", timeout=10000)
                 data2 = page.evaluate(_EXTRACT_JS)
                 bookings2 = data2.get("bookings", []) if not data2.get("error") else []
