@@ -56,38 +56,20 @@ def check_smashing():
         browser = p.chromium.launch(headless=not DEBUG)
         page = browser.new_page()
 
-        # Retry the initial load up to twice with a longer timeout on the
-        # second attempt. Confirmed via live testing (same site, fresh
-        # cookie-less browser, works instantly and consistently every
-        # time from a normal connection) that this isn't a real site
-        # change or a cookie/consent-banner issue.
-        last_error = None
-        for attempt, timeout_ms in enumerate([30000, 60000]):
-            try:
-                _load_venue_page(page, timeout_ms)
-                last_error = None
-                break
-            except Exception as e:
-                last_error = e
-                if DEBUG:
-                    print(f"Attempt {attempt + 1} failed ({e}); retrying with a longer timeout")
-        if last_error:
-            # Even a 60-second timeout wasn't enough -- that's long
-            # enough to rule out plain network latency as the cause, so
-            # something structurally different is likely happening in
-            # this environment specifically (similar to how a screenshot
-            # was what actually revealed Playtomic's CloudFront block,
-            # instead of continuing to guess at header/timing fixes).
-            # Capture real evidence of what the page actually looks like
-            # here, always (not just in DEBUG mode).
-            try:
-                os.makedirs("debug_failures", exist_ok=True)
-                page.screenshot(path="debug_failures/smashing_failure.png", full_page=True)
-                with open("debug_failures/smashing_failure.html", "w") as f:
-                    f.write(page.content())
-            except Exception as capture_err:
-                print(f"[smashing] Also failed to capture debug evidence: {capture_err}")
-            raise last_error
+        # NOTE: this occasionally fails with a Cloudflare "Performing
+        # security verification" bot-challenge page -- confirmed via a
+        # real captured screenshot on 2026-09-01. This is an IP-based
+        # block that varies run to run (GitHub Actions uses a large,
+        # shared, rotating IP pool, and only some of those IPs get
+        # flagged by Cloudflare at any given time), not a real site
+        # change or a timing issue -- retrying with a longer timeout
+        # doesn't help, since a page stuck on a CAPTCHA will never
+        # naturally proceed no matter how long you wait. So: just one
+        # attempt, fail fast, and let the existing failure-streak alert
+        # in main.py tell you if it's down for a while. If you want to
+        # re-diagnose this in the future, temporarily add back a
+        # page.screenshot() call here on failure.
+        _load_venue_page(page, attempt_timeout_ms=30000)
 
         # Date tabs render as a row of buttons, each showing e.g. "Sat\n29/08".
         # We look at all of them, figure out which correspond to our wanted
