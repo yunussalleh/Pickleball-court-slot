@@ -144,12 +144,34 @@ def check_pixelpickle():
             date_str = date.isoformat()
             url = f"{BASE_URL}?viewtype=0&viewdate={date_str}"
 
-            try:
-                page.goto(url, wait_until="networkidle", timeout=20000)
-                page.wait_for_selector("text=/PickleBall Court/i", timeout=10000)
-            except Exception as e:
-                print(f"[pixelpickle] Error loading {date_str}: {e}")
+            load_error = None
+            for timeout_ms in (20000, 40000):
+                try:
+                    page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                    page.wait_for_selector("text=/PickleBall Court/i", timeout=10000)
+                    load_error = None
+                    break
+                except Exception as e:
+                    load_error = e
+                    if DEBUG:
+                        print(f"[pixelpickle] {date_str}: load attempt failed ({e}), retrying")
+
+            if load_error:
+                print(f"[pixelpickle] Error loading {date_str}: {load_error}")
                 failures += 1
+                # Capture real evidence of what's actually happening here,
+                # since this exact date has been failing intermittently
+                # and repeatedly -- rather than guess whether it's plain
+                # slowness or something like the Cloudflare bot-challenge
+                # that turned out to be blocking Smashing, save what the
+                # page actually looks like so it can be checked directly.
+                try:
+                    os.makedirs("debug_failures", exist_ok=True)
+                    page.screenshot(path=f"debug_failures/pixelpickle_{date_str}.png", full_page=True)
+                    with open(f"debug_failures/pixelpickle_{date_str}.html", "w") as f:
+                        f.write(page.content())
+                except Exception as capture_err:
+                    print(f"[pixelpickle] Also failed to capture debug evidence: {capture_err}")
                 continue
 
             data = page.evaluate(_EXTRACT_JS)
