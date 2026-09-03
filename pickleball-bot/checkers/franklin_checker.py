@@ -155,6 +155,18 @@ def check_franklin():
                 if DEBUG:
                     print(f"Initial load attempt failed ({e}); retrying with a longer timeout")
         if load_error:
+            # Increasing the timeout didn't help across two attempts --
+            # that pattern (more time doesn't fix it) is exactly what we
+            # saw with Smashing turning out to be a Cloudflare bot
+            # challenge, not genuine slowness. Capture real evidence of
+            # what's actually happening rather than guessing further.
+            try:
+                os.makedirs("debug_failures", exist_ok=True)
+                page.screenshot(path="debug_failures/franklin_failure.png", full_page=True)
+                with open("debug_failures/franklin_failure.html", "w") as f:
+                    f.write(page.content())
+            except Exception as capture_err:
+                print(f"[franklin] Also failed to capture debug evidence: {capture_err}")
             browser.close()
             raise RuntimeError(f"Failed to load Franklin booking page: {load_error}")
 
