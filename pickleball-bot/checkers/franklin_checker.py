@@ -138,12 +138,25 @@ def check_franklin():
         browser = p.chromium.launch(headless=not DEBUG)
         page = browser.new_page()
 
-        try:
-            page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_selector("text=Select date and time", timeout=15000)
-        except Exception as e:
+        # Retry once with a longer timeout. Confirmed via multiple other
+        # checkers in this project (Kings, Smashing, Pixel Pickle) that
+        # GitHub Actions consistently needs more time to fully render
+        # these SPAs than a local/manual test does -- a single fixed
+        # timeout that works fine locally can still fail in production.
+        load_error = None
+        for timeout_ms in (15000, 30000):
+            try:
+                page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_selector("text=Select date and time", timeout=timeout_ms)
+                load_error = None
+                break
+            except Exception as e:
+                load_error = e
+                if DEBUG:
+                    print(f"Initial load attempt failed ({e}); retrying with a longer timeout")
+        if load_error:
             browser.close()
-            raise RuntimeError(f"Failed to load Franklin booking page: {e}")
+            raise RuntimeError(f"Failed to load Franklin booking page: {load_error}")
 
         # Date tabs show as two-line buttons, e.g. "FRI\n04". Collect them
         # once up front -- there are only ever a handful (~6) at a time.
