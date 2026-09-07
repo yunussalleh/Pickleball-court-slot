@@ -34,6 +34,7 @@ from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
 from checkers.theark_checker import check_theark
 from checkers.pixelpickle_checker import check_pixelpickle
+from checkers.activesg_checker import check_activesg
 
 # The full set of consecutive hours a valid session needs, e.g. {18, 19}
 # for a 6pm-8pm (2-hour) session. If WANTED_START_HOUR/END_HOUR in
@@ -66,6 +67,7 @@ CHECKERS = {
     "kings": check_kings,
     "theark": check_theark,  # Orchid Country Club
     "pixelpickle": check_pixelpickle,  # Pixel Pickle
+    "activesg": check_activesg,  # ActiveSG Jurong Town ballot
     # "franklin": check_franklin,  # DISABLED -- Cloudflare bot block, see note above
 }
 
