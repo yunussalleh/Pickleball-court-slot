@@ -34,7 +34,6 @@ from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
 from checkers.theark_checker import check_theark
 from checkers.pixelpickle_checker import check_pixelpickle
-from checkers.activesg_checker import check_activesg
 
 # The full set of consecutive hours a valid session needs, e.g. {18, 19}
 # for a 6pm-8pm (2-hour) session. If WANTED_START_HOUR/END_HOUR in
@@ -62,13 +61,24 @@ FAILURE_STATE_FILE = os.path.join(_state_dir, "failure_streaks.json")
 # technique as above) that it hits an identical Cloudflare "Performing
 # security verification" bot-challenge page from GitHub Actions' IP --
 # see the note at the top of checkers/franklin_checker.py.
+# NOTE: Franklin Pickleball Singapore is ALSO deliberately not included
+# here, disabled on 2026-09-02. Confirmed via a captured screenshot (same
+# technique as above) that it hits an identical Cloudflare "Performing
+# security verification" bot-challenge page from GitHub Actions' IP --
+# see the note at the top of checkers/franklin_checker.py.
+#
+# NOTE: ActiveSG (Jurong Town ballot) is ALSO deliberately not included
+# here, disabled on 2026-09-07. Same identical Cloudflare bot-challenge
+# signature, confirmed via a captured screenshot -- see the note at the
+# top of checkers/activesg_checker.py. This is the third venue in this
+# project to hit this exact same block (after Smashing and Franklin).
 CHECKERS = {
     "smashing": check_smashing,
     "kings": check_kings,
     "theark": check_theark,  # Orchid Country Club
     "pixelpickle": check_pixelpickle,  # Pixel Pickle
-    "activesg": check_activesg,  # ActiveSG Jurong Town ballot
     # "franklin": check_franklin,  # DISABLED -- Cloudflare bot block, see note above
+    # "activesg": check_activesg,  # DISABLED -- Cloudflare bot block, see note above
 }
 
 
