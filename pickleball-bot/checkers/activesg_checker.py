@@ -137,6 +137,8 @@ def check_activesg():
         browser = p.chromium.launch(headless=not DEBUG)
         page = browser.new_page()
 
+        evidence_captured = False
+
         for date in wanted_dates:
             date_str = date.isoformat()
             url = f"{BASE_URL}&date={date_str}"
@@ -149,6 +151,22 @@ def check_activesg():
             except Exception as e:
                 print(f"[activesg] Error loading {date_str}: {e}")
                 hard_failures += 1
+                # Every date failing identically suggests a site-wide
+                # issue (e.g. a bot-detection block), not per-date
+                # flakiness -- confirmed this exact pattern turned out to
+                # be a Cloudflare challenge for both Smashing and Franklin
+                # elsewhere in this project. Capture real evidence once
+                # per run rather than guessing, and rather than
+                # screenshotting on every single failed date.
+                if not evidence_captured:
+                    try:
+                        os.makedirs("debug_failures", exist_ok=True)
+                        page.screenshot(path="debug_failures/activesg_failure.png", full_page=True)
+                        with open("debug_failures/activesg_failure.html", "w") as f:
+                            f.write(page.content())
+                        evidence_captured = True
+                    except Exception as capture_err:
+                        print(f"[activesg] Also failed to capture debug evidence: {capture_err}")
                 continue
 
             data = page.evaluate(_EXTRACT_JS, wanted_labels)
