@@ -34,6 +34,14 @@ VERIFIED LIVE against the real site:
   whether that hour falls inside ANY existing booking's time range for
   that court's cellIndex. If it doesn't overlap any booking, it's open.
 
+This checker also captures a full-page screenshot the moment a date is
+found to have a genuine opening, saved under screenshots/ and attached to
+each found slot's "screenshot" key. main.py sends this to you as a
+Telegram photo alongside the text alert, so you can visually confirm
+exactly what the bot saw at that moment (useful since a live,
+constantly-changing booking page can occasionally shift between when the
+bot reads it and when you go to book).
+
 If this site changes its layout, this is the file to fix -- run with
 DEBUG=1 to open a visible browser and see what it's finding:
     DEBUG=1 python checkers/pixelpickle_checker.py
@@ -135,6 +143,7 @@ def check_pixelpickle():
     ]
 
     failures = 0
+    os.makedirs("screenshots", exist_ok=True)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not DEBUG)
@@ -228,11 +237,32 @@ def check_pixelpickle():
                 for h in range(start_hour, end_hour):
                     booked.add((b["court"], h))
 
+            date_has_opening = False
             for court in courts:
                 for hour in range(WANTED_START_HOUR, WANTED_END_HOUR):
                     is_open = (court, hour) not in booked
                     if DEBUG:
                         print(f"    {court} {hour}:00 open={is_open}")
+                    if is_open:
+                        date_has_opening = True
+
+            screenshot_path = None
+            if date_has_opening:
+                # Capture visual proof of exactly what the page looked
+                # like at the moment we decided this date has an opening
+                # -- lets you (or us) directly check a result instead of
+                # just trusting the text, e.g. if a slot is reported open
+                # but turns out already booked by the time you try.
+                screenshot_path = os.path.join("screenshots", f"pixelpickle_{date_str}.png")
+                try:
+                    page.screenshot(path=screenshot_path, full_page=True)
+                except Exception as e:
+                    print(f"[pixelpickle] Failed to capture screenshot for {date_str}: {e}")
+                    screenshot_path = None
+
+            for court in courts:
+                for hour in range(WANTED_START_HOUR, WANTED_END_HOUR):
+                    is_open = (court, hour) not in booked
                     if is_open:
                         found.append({
                             "venue": VENUE_NAME,
@@ -240,6 +270,7 @@ def check_pixelpickle():
                             "start_time": f"{hour:02d}:00",
                             "court": court,
                             "url": url,
+                            "screenshot": screenshot_path,
                         })
 
         if DEBUG:
