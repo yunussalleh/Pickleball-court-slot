@@ -29,7 +29,7 @@ from collections import defaultdict
 from datetime import datetime
 
 from config import STATE_FILE, WANTED_START_HOUR, WANTED_END_HOUR
-from notifier import send_telegram_message
+from notifier import send_telegram_message, send_telegram_photo
 from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
 from checkers.theark_checker import check_theark
@@ -61,11 +61,6 @@ FAILURE_STATE_FILE = os.path.join(_state_dir, "failure_streaks.json")
 # technique as above) that it hits an identical Cloudflare "Performing
 # security verification" bot-challenge page from GitHub Actions' IP --
 # see the note at the top of checkers/franklin_checker.py.
-# NOTE: Franklin Pickleball Singapore is ALSO deliberately not included
-# here, disabled on 2026-09-02. Confirmed via a captured screenshot (same
-# technique as above) that it hits an identical Cloudflare "Performing
-# security verification" bot-challenge page from GitHub Actions' IP --
-# see the note at the top of checkers/franklin_checker.py.
 #
 # NOTE: ActiveSG (Jurong Town ballot) is ALSO deliberately not included
 # here, disabled on 2026-09-07. Same identical Cloudflare bot-challenge
@@ -89,7 +84,7 @@ def find_full_blocks(slots: list) -> list:
     bookable, back-to-back 2-hour session.
     """
     groups = defaultdict(set)
-    sample = {}  # one representative slot dict per group, for venue/url info
+    sample = {}  # one representative slot dict per group, for venue/url/screenshot info
 
     for s in slots:
         hour = int(s["start_time"].split(":")[0])
@@ -109,6 +104,7 @@ def find_full_blocks(slots: list) -> list:
                 "start_time": f"{WANTED_START_HOUR:02d}:00",
                 "end_time": f"{WANTED_END_HOUR:02d}:00",
                 "url": ref["url"],
+                "screenshot": ref.get("screenshot"),
             })
     return blocks
 
@@ -225,6 +221,18 @@ def main():
         message = "\n".join(lines)
         print(message)
         send_telegram_message(message)
+
+        # Send a photo for each new block that has one, so you can
+        # visually double-check exactly what the page looked like at the
+        # moment it was found open -- catches the case where a scraper
+        # was a step behind a fast-changing live booking page.
+        for b in new_blocks:
+            screenshot = b.get("screenshot")
+            if screenshot and os.path.exists(screenshot):
+                day_name = datetime.strptime(b["date"], "%Y-%m-%d").strftime("%A")
+                court_str = f" ({b['court']})" if b["court"] != "any" else ""
+                caption = f"{b['venue']}{court_str} \u2014 {day_name}, {b['date']}"
+                send_telegram_photo(screenshot, caption=caption)
 
         for b in new_blocks:
             seen.add(block_key(b))
