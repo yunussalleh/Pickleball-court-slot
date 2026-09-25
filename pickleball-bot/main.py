@@ -34,6 +34,7 @@ from checkers.smashing_checker import check_smashing
 from checkers.kings_checker import check_kings
 from checkers.theark_checker import check_theark
 from checkers.pixelpickle_checker import check_pixelpickle
+from special_watch import check_special_watch
 
 # The full set of consecutive hours a valid session needs, e.g. {18, 19}
 # for a 6pm-8pm (2-hour) session. If WANTED_START_HOUR/END_HOUR in
@@ -191,6 +192,11 @@ def run_all_checkers():
 
 def main():
     all_slots, failure_warnings = run_all_checkers()
+
+    # One-off special watch, separate from the main Fri/Sat/Sun 6-8pm
+    # system above -- see special_watch.py for details. Remove this call
+    # (and the import above) once it's no longer needed.
+    check_special_watch()
 
     for w in failure_warnings:
         print(w)
